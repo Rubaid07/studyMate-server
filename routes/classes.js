@@ -1,27 +1,43 @@
 import { Router } from 'express';
 import { ObjectId } from 'mongodb';
+import asyncHandler from 'express-async-handler';
 
 const router = Router();
 
 export default function classesRoutes(db, cache, cacheKey, invalidate, isValidObjectId, requireFields) {
-  router.get('/', async (req, res) => {
+
+  // GET all classes
+  router.get('/', asyncHandler(async (req, res) => {
     const key = cacheKey('classes', req.userId);
-    if (cache.has(key)) return res.json(cache.get(key));
+
+    const cachedData = cache.get(key);
+    if (cachedData) {
+      console.log('Serving from cache:', key);
+      return res.json(cachedData);
+    }
+
     const classes = await db.collection('classes')
       .find({ userId: req.userId })
       .sort({ dayIndex: 1, startTime: 1, createdAt: -1 })
       .toArray();
-    cache.set(key, classes);
-    res.json(classes);
-  });
 
-  router.post('/', async (req, res) => {
+    cache.set(key, classes);
+    console.log('Data cached:', key);
+
+    res.json(classes);
+  }));
+
+  // POST new class
+  router.post('/', asyncHandler(async (req, res) => {
     const body = req.body || {};
     const missing = requireFields(body, ['subject', 'day', 'startTime', 'endTime']);
-    if (missing.length) return res.status(400).json({ message: 'Missing fields', missing });
 
-    const days = ['sun','mon','tue','wed','thu','fri','sat'];
-    const dayIndex = days.indexOf(String(body.day).slice(0,3).toLowerCase());
+    if (missing.length) {
+      return res.status(400).json({ message: 'Missing fields', missing });
+    }
+
+    const days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const dayIndex = days.indexOf(String(body.day).slice(0, 3).toLowerCase());
 
     const newDoc = {
       subject: String(body.subject).trim(),
@@ -32,17 +48,29 @@ export default function classesRoutes(db, cache, cacheKey, invalidate, isValidOb
       endTime: String(body.endTime),
       color: body.color || '#45b7d1',
       userId: req.userId,
+      email: req.decodedEmail,
       createdAt: new Date(),
     };
 
-    const r = await db.collection('classes').insertOne(newDoc);
-    invalidate('classes', req.userId);
-    res.status(201).json({ ...newDoc, _id: r.insertedId });
-  });
 
-  router.put('/:id', async (req, res) => {
+    const result = await db.collection('classes').insertOne(newDoc);
+
+    // Invalidate relevant caches
+    invalidate('classes', req.userId);
+    invalidate('dashboard-summary', req.userId);
+
+    console.log('Class created, cache invalidated');
+
+    res.status(201).json({ ...newDoc, _id: result.insertedId });
+  }));
+
+  // PUT update class
+  router.put('/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
-    if (!isValidObjectId(id)) return res.status(400).json({ message: 'Invalid ID format' });
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: 'Invalid ID format' });
+    }
 
     const updatedClass = { ...req.body, updatedAt: new Date() };
     delete updatedClass._id;
@@ -60,20 +88,49 @@ export default function classesRoutes(db, cache, cacheKey, invalidate, isValidOb
       { $set: updatedClass }
     );
 
-    if (result.matchedCount === 0) return res.status(404).json({ message: 'Class not found or unauthorized' });
-    invalidate('classes', req.userId);
-    res.json({ message: 'Class updated successfully' });
-  });
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: 'Class not found or unauthorized' });
+    }
 
-  router.delete('/:id', async (req, res) => {
+    // Invalidate relevant caches
+    invalidate('classes', req.userId);
+    invalidate('dashboard-summary', req.userId);
+
+    console.log('Class updated, cache invalidated');
+
+    res.json({
+      message: 'Class updated successfully',
+      updated: result.modifiedCount
+    });
+  }));
+
+  // DELETE class
+  router.delete('/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
-    if (!isValidObjectId(id)) return res.status(400).json({ message: 'Invalid ID format' });
 
-    const result = await db.collection('classes').deleteOne({ _id: new ObjectId(id), userId: req.userId });
-    if (result.deletedCount === 0) return res.status(404).json({ message: 'Class not found or unauthorized' });
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: 'Invalid ID format' });
+    }
+
+    const result = await db.collection('classes').deleteOne(
+      { _id: new ObjectId(id), userId: req.userId }
+    );
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: 'Class not found or unauthorized' });
+    }
+
+    // Invalidate relevant caches
     invalidate('classes', req.userId);
-    res.json({ message: 'Class deleted successfully' });
-  });
+    invalidate('dashboard-summary', req.userId);
+
+    console.log('Class deleted, cache invalidated');
+
+    res.json({
+      message: 'Class deleted successfully',
+      deleted: result.deletedCount
+    });
+  }));
 
   return router;
 }

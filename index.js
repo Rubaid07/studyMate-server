@@ -6,11 +6,11 @@ import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
 import admin from 'firebase-admin';
-import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import NodeCache from 'node-cache';
 
 // routes
+import usersRoutes from "./routes/users.js";
 import classesRoutes from './routes/classes.js';
 import plannerRoutes from './routes/planner.js';
 import budgetRoutes from './routes/budget.js';
@@ -27,9 +27,28 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const app = express();
 
 // cache setup
-const cache = new NodeCache({ stdTTL: 600, checkperiod: 120 });
+const cache = new NodeCache({ 
+  stdTTL: 300,
+  checkperiod: 60,
+  useClones: false
+});
+
 const cacheKey = (name, userId) => `${name}:${userId}`;
-const invalidate = (name, userId) => cache.del(cacheKey(name, userId));
+const invalidate = (name, userId) => {
+  const key = cacheKey(name, userId);
+  cache.del(key);
+  console.log(`Cache invalidated: ${key}`);
+};
+
+// Bulk invalidation function
+const invalidateAll = (userId) => {
+  const patterns = ['classes', 'planner', 'budget', 'summary', 'dashboard'];
+  patterns.forEach(pattern => {
+    const key = cacheKey(pattern, userId);
+    cache.del(key);
+  });
+  console.log(`All cache invalidated for user: ${userId}`);
+};
 
 app.use(helmet());
 app.use(compression());
@@ -63,22 +82,23 @@ app.use(limiter);
 const authMiddleware = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization || '';
-    if (authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split(' ')[1];
-      const decoded = await admin.auth().verifyIdToken(token);
-      req.userId = decoded.uid;
-      return next();
+
+    if (!authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ message: 'Unauthorized: Bearer token required' });
     }
-    const devUid = req.headers['x-user-id'];
-    if (devUid) {
-      req.userId = devUid;
-      return next();
-    }
-    return res.status(401).json({ message: 'Unauthorized: token or x-user-id required' });
+
+    const token = authHeader.split(' ')[1];
+    const decoded = await admin.auth().verifyIdToken(token);
+
+    req.decodedEmail = decoded.email;
+    req.userId = decoded.uid;
+
+    return next();
   } catch (err) {
-    return res.status(401).json({ message: 'Unauthorized', error: err.message });
+    return res.status(403).json({ message: 'Forbidden Access', error: err.message });
   }
 };
+
 
 // ---------------- Utility functions ----------------
 const isValidObjectId = (id) => {
@@ -100,7 +120,7 @@ app.get('/health', (_req, res) => res.json({ status: 'OK', timestamp: new Date()
 
 // Apply auth middleware to all API routes
 app.use('/api', authMiddleware);
-
+app.use('/api/users', usersRoutes(db));
 app.use('/api/classes', classesRoutes(db, cache, cacheKey, invalidate, isValidObjectId, requireFields));
 app.use('/api/planner', plannerRoutes(db, cache, cacheKey, invalidate, isValidObjectId, requireFields));
 app.use('/api/budget', budgetRoutes(db, cache, cacheKey, invalidate, isValidObjectId, requireFields));
@@ -115,7 +135,7 @@ app.use((err, _req, res, _next) => {
 });
 
 // ---------------- Start server ----------------
-const server = app.listen(PORT, () => console.log(`🚀 Server running on ${PORT}`));
+const server = app.listen(PORT, () => console.log(` Server running on ${PORT}`));
 
 // Graceful shutdown
 const shutdown = async () => {
