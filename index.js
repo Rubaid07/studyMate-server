@@ -16,6 +16,7 @@ import plannerRoutes from './routes/planner.js';
 import budgetRoutes from './routes/budget.js';
 import summaryRoutes from './routes/summary.js';
 import qaRoutes from './routes/qa.js';
+import quizResultsRoutes from './routes/quizResults.js';
 
 dotenv.config();
 
@@ -125,6 +126,7 @@ app.use('/api/classes', classesRoutes(db, cache, cacheKey, invalidate, isValidOb
 app.use('/api/planner', plannerRoutes(db, cache, cacheKey, invalidate, isValidObjectId, requireFields));
 app.use('/api/budget', budgetRoutes(db, cache, cacheKey, invalidate, isValidObjectId, requireFields));
 app.use('/api/summary', summaryRoutes(db, cache, cacheKey, invalidate));
+app.use('/api/quiz', quizResultsRoutes(db, cache, cacheKey, invalidate));
 app.use('/api/qa', qaRoutes(GEMINI_API_KEY));
 
 // ---------------- Error handler ----------------

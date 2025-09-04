@@ -12,7 +12,7 @@ export default function summaryRoutes(db, cache, cacheKey, invalidate) {
 
       const userId = req.userId;
 
-      const [classes, budgetEntries, plannerTasks, wellnessStats, studySessions] = await Promise.all([
+      const [classes, budgetEntries, plannerTasks, wellnessStats, studySessions, quizResults] = await Promise.all([
         db.collection('classes')
           .find({ userId })
           .sort({ dayIndex: 1, startTime: 1 })
@@ -33,6 +33,11 @@ export default function summaryRoutes(db, cache, cacheKey, invalidate) {
         db.collection('study_sessions')
           .find({ userId })
           .sort({ date: -1 })
+          .toArray(),
+        db.collection('quiz_results')
+          .find({ userId })
+          .sort({ date: -1 })
+          .limit(5)
           .toArray()
       ]);
 
@@ -177,12 +182,24 @@ export default function summaryRoutes(db, cache, cacheKey, invalidate) {
         }, {});
 
       // dashboard summary
+      const quizStats = {
+        totalQuizzes: quizResults.length,
+        averageScore: quizResults.length > 0 
+          ? Math.round(quizResults.reduce((sum, result) => sum + result.percentage, 0) / quizResults.length)
+          : 0,
+        bestScore: quizResults.length > 0
+          ? Math.max(...quizResults.map(result => result.percentage))
+          : 0
+      };
+
+      // dashboard summary-এ quiz stats add করুন
       const dashboardSummary = {
         classes: classSummary,
         budget: budgetSummary,
         expensesByCategory,
         planner: plannerSummary,
         wellness: wellnessSummary,
+        quiz: quizStats, 
         weeklyData: {
           studySessions: studySessions.filter(session => new Date(session.date) >= oneWeekAgo),
           expenses: weeklyExpenseData
@@ -191,8 +208,11 @@ export default function summaryRoutes(db, cache, cacheKey, invalidate) {
           totalClasses: classSummary.total,
           balance: budgetSummary.balance,
           pendingTasks: plannerSummary.pendingTasks,
-          studyHoursThisWeek: weeklyStudyHours
+          studyHoursThisWeek: weeklyStudyHours,
+          totalQuizzes: quizStats.totalQuizzes,
+          averageQuizScore: quizStats.averageScore
         },
+        recentQuizzes: quizResults, // Add recent quizzes
         timestamp: new Date()
       };
       
